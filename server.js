@@ -42,7 +42,7 @@ app.use(express.json({ limit: "1mb" }));
     console.error(e);
     res.status(500).json({ error: "PDF error" });
   }
-});
+
 const PORT = process.env.PORT || 10000;
 
 
@@ -77,7 +77,7 @@ res.setHeader(
   } catch (err) {
     res.status(500).json({ error: "PDF oluşturulamadı" });
   }
-});
+
 
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -91,7 +91,7 @@ function isValidInstagramUrl(url) {
   } catch {
     return false;
   }
-}
+
 
 async function fetchPublicMeta(url) {
   // Best-effort: IG may block some server fetches. We try with headers.
@@ -225,8 +225,8 @@ app.post("/api/pdf", (req, res) => {
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: "PDF error" });
-  }
-});
+  
+
 
 
 
