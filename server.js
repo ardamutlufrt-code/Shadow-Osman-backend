@@ -29,10 +29,10 @@ app.post("/api/pdf", (req, res) => {
       : "";
 
     res.setHeader("Content-Type", "application/pdf");
-    res.setHeader(
-      "Content-Disposition"
-      "attachment; filename=shadowos-report.pdf"
-    );
+res.setHeader(
+  "Content-Disposition",
+  "attachment; filename=shadowos-report.pdf"
+);
 
     const doc = new PDFDocument({ margin: 40 });
     doc.pipe(res);
