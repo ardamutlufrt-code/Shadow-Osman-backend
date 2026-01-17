@@ -17,7 +17,34 @@ import OpenAI from "openai";
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: "1mb" }));
+app.post("/api/pdf", (req, res) => {
+  try {
+    const title = req.body && req.body.title
+      ? req.body.title
+      : "Instagram Kanal Strateji Raporu";
 
+    const content = req.body && req.body.content
+      ? req.body.content
+      : "";
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      "attachment; filename=shadowos-report.pdf"
+    );
+
+    const doc = new PDFDocument({ margin: 40 });
+    doc.pipe(res);
+
+    doc.fontSize(20).text(title, { align: "center" });
+    doc.moveDown();
+    doc.fontSize(12).text(content, { lineGap: 6 });
+
+    doc.end();
+  } catch (err) {
+    res.status(500).json({ error: "PDF oluşturulamadı" });
+  }
+});
 const PORT = process.env.PORT || 8787;
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
