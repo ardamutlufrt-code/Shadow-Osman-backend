@@ -1,3 +1,10 @@
+/**
+ * ShadowOS AI Backend (PRO) - server.js
+ * - POST /api/analyze  { url }  -> returns structured JSON (EN)
+ * - POST /api/pdf      { title, content } -> returns a simple PDF
+ * - GET  /health       -> ok
+ */
+
 import express from "express";
 import cors from "cors";
 import * as cheerio from "cheerio";
@@ -6,149 +13,159 @@ import PDFDocument from "pdfkit";
 
 const app = express();
 app.use(cors());
-app.use(express.json({ limit: "2mb" }));
+app.use(express.json({ limit: "1mb" }));
 
 const PORT = process.env.PORT || 10000;
 
-// OpenAI client (set in Render Environment: OPENAI_API_KEY)
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
+const client = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY || "",
 });
 
 function isValidInstagramUrl(url) {
   try {
     const u = new URL(url);
-    return (
-      ["instagram.com", "www.instagram.com"].includes(u.hostname) &&
-      u.pathname &&
-      u.pathname !== "/"
-    );
+    const host = u.hostname.replace("www.", "");
+    if (!["instagram.com", "instagr.am"].includes(host)) return false;
+    return true;
   } catch {
     return false;
   }
 }
 
 async function fetchPublicMeta(url) {
-  // Best-effort: Instagram may block requests sometimes.
-  const res = await fetch(url, {
-    headers: {
-      "User-Agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Safari/537.36",
-      Accept: "text/html,application/xhtml+xml",
-    },
-  });
+  // Best-effort: Instagram may block bots sometimes.
+  const headers = {
+    "User-Agent":
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123 Safari/537.36",
+    Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+  };
 
-  const html = await res.text();
-  const $ = cheerio.load(html);
+  let html = "";
+  try {
+    const r = await fetch(url, { method: "GET", headers, redirect: "follow" });
+    html = await r.text();
+  } catch {
+    html = "";
+  }
 
-  const ogTitle = $('meta[property="og:title"]').attr("content") || "";
-  const ogDesc = $('meta[property="og:description"]').attr("content") || "";
-  const title = $("title").text() || "";
+  const $ = cheerio.load(html || "");
+  const get = (sel, attr = "content") => $(sel).attr(attr) || "";
 
-  return { ogTitle, ogDesc, title, fetched: true };
+  const title =
+    get('meta[property="og:title"]') ||
+    get("title", "text") ||
+    $("title").text() ||
+    "";
+  const description =
+    get('meta[property="og:description"]') ||
+    get('meta[name="description"]') ||
+    "";
+
+  const canonical = $('link[rel="canonical"]').attr("href") || "";
+
+  const ogImage = get('meta[property="og:image"]') || "";
+
+  return {
+    inputUrl: url,
+    canonical,
+    title: (title || "").trim(),
+    description: (description || "").trim(),
+    ogImage: (ogImage || "").trim(),
+    fetched: Boolean(html),
+    notes: html
+      ? "Public meta fetched (best-effort)."
+      : "Could not fetch HTML (Instagram may block). Using best-effort inference.",
+  };
 }
 
 function buildSystemPrompt() {
   return `
-You are a senior Instagram growth strategist and digital product expert.
+You are "ShadowOS", a world-class Instagram growth strategist and digital-product consultant.
+You MUST respond in ENGLISH.
+You MUST output STRICT JSON ONLY (no markdown, no comments, no extra keys).
+Be specific and actionable. Do not ask the user questions. Infer intelligently from the provided page meta.
+If data is missing, make clearly labeled best-effort assumptions with low-risk recommendations.
 
-IMPORTANT:
-- Respond ONLY in English.
-- Return ONLY valid JSON.
-- Do NOT include markdown.
-- Do NOT include explanations outside JSON.
+Return JSON with EXACTLY this schema:
 
-Your task:
-- Identify the account niche clearly.
-- Detect gaps and missing monetization opportunities.
-- Propose digital products based on audience needs.
-
-Output JSON schema:
 {
-  "niche": string,
-  "topics": string[],
-  "strengths": string[],
-  "gaps": string[],
-  "digital_products": {
-    "basic": {
-      "name": string,
-      "price_suggestion": string,
-      "includes": string[]
+  "niche": "string",
+  "audience": {
+    "primary": "string",
+    "secondary": "string"
+  },
+  "positioning": {
+    "one_liner": "string",
+    "value_proposition": "string",
+    "differentiators": ["string", "string", "string"]
+  },
+  "content_pillars": [
+    { "name": "string", "topics": ["string","string","string","string","string"] },
+    { "name": "string", "topics": ["string","string","string","string","string"] },
+    { "name": "string", "topics": ["string","string","string","string","string"] }
+  ],
+  "gaps_and_opportunities": [
+    { "gap": "string", "why_it_matters": "string", "fix": "string" },
+    { "gap": "string", "why_it_matters": "string", "fix": "string" },
+    { "gap": "string", "why_it_matters": "string", "fix": "string" }
+  ],
+  "digital_product": {
+    "tier1_pdf": {
+      "name": "string",
+      "promise": "string",
+      "outline": ["string","string","string","string","string","string"],
+      "price_suggestion_usd": 0
     },
-    "standard": {
-      "name": string,
-      "price_suggestion": string,
-      "includes": string[]
+    "tier2_video_course": {
+      "name": "string",
+      "promise": "string",
+      "modules": ["string","string","string","string","string","string"],
+      "price_suggestion_usd": 0
     },
-    "premium": {
-      "name": string,
-      "price_suggestion": string,
-      "includes": string[]
+    "tier3_1to1": {
+      "name": "string",
+      "deliverables": ["string","string","string","string","string"],
+      "price_suggestion_usd": 0
     }
   },
-  "content_plan_30_days": [
+  "30_day_plan": [
     {
-      "day": number,
-      "format": "Reel" | "Carousel" | "Story" | "Live",
-      "title": string,
-      "hook": string,
-      "cta": string
+      "day": 1,
+      "format": "Reel|Carousel|Story|Live",
+      "hook": "string",
+      "idea": "string",
+      "cta": "string"
     }
   ],
-  "notes": string
-}
-`.trim();
-}
-
-Schema:
-{
-  "niche": string,
-  "topics": string[],
-  "strengths": string[],
-  "gaps": string[],
-  "digital_products": {
-    "basic": {"name": string, "price_suggestion": string, "includes": string[]},
-    "standard": {"name": string, "price_suggestion": string, "includes": string[]},
-    "premium": {"name": string, "price_suggestion": string, "includes": string[]}
+  "profile_optimization": {
+    "bio_template": "string",
+    "highlights": ["string","string","string","string","string"],
+    "link_in_bio_funnel": ["string","string","string"]
   },
-  "content_plan_30_days": Array<{
-    "day": number,
-    "format": "Reel"|"Carousel"|"Story"|"Live",
-    "title": string,
-    "hook": string,
-    "cta": string
-  }>,
-  "notes": string
+  "confidence": {
+    "level": "low|medium|high",
+    "reason": "string"
+  }
 }
+
+Rules:
+- 30_day_plan MUST contain exactly 30 items with day 1..30.
+- Keep hooks short and punchy.
+- Provide realistic, revenue-focused product ideas.
 `.trim();
 }
 
-function buildUserPrompt(url, meta) {
+function buildUserPrompt(meta) {
   return `
-Analyze this Instagram account using only public metadata.
-If metadata is limited, make best-effort inferences and be explicit in "notes".
+Analyze this Instagram account based on public meta (best-effort). Produce the JSON schema.
 
-Instagram URL: ${url}
-
-Public metadata:
-- og:title: ${meta.ogTitle}
-- og:description: ${meta.ogDesc}
-- title tag: ${meta.title}
-
-Return JSON only.
+META:
+${JSON.stringify(meta, null, 2)}
 `.trim();
 }
 
-// Healthcheck
-app.get("/", (req, res) => {
-  res.json({
-    ok: true,
-    service: "ShadowOS-backend",
-    time: new Date().toISOString(),
-  });
-});
+app.get("/health", (req, res) => res.json({ ok: true }));
 
-// Main analyze endpoint (frontend should call this)
 app.post("/api/analyze", async (req, res) => {
   try {
     const { url } = req.body || {};
@@ -156,59 +173,48 @@ app.post("/api/analyze", async (req, res) => {
     if (!url || !isValidInstagramUrl(url)) {
       return res.status(400).json({ error: "Please provide a valid Instagram URL." });
     }
-
     if (!process.env.OPENAI_API_KEY) {
-      return res.status(500).json({
-        error:
-          "OPENAI_API_KEY is missing. Add it in Render > Settings > Environment.",
-      });
+      return res.status(500).json({ error: "Missing OPENAI_API_KEY on the server." });
     }
 
-    // Fetch metadata best-effort
-    let meta = { ogTitle: "", ogDesc: "", title: "", fetched: false };
-    try {
-      meta = await fetchPublicMeta(url);
-    } catch {
-      // If Instagram blocks, we still proceed with AI using empty meta
-      meta = { ogTitle: "", ogDesc: "", title: "", fetched: false };
-    }
+    const meta = await fetchPublicMeta(url);
 
-    const model = process.env.OPENAI_MODEL || "gpt-4.1-mini";
-
-    const completion = await openai.chat.completions.create({
-      model,
+    const completion = await client.chat.completions.create({
+      model: process.env.OPENAI_MODEL || "gpt-4.1-mini",
       temperature: 0.7,
       response_format: { type: "json_object" },
       messages: [
         { role: "system", content: buildSystemPrompt() },
-        { role: "user", content: buildUserPrompt(url, meta) },
+        { role: "user", content: buildUserPrompt(meta) },
       ],
     });
 
     const raw = completion.choices?.[0]?.message?.content || "{}";
 
-    let result;
+    let data;
     try {
-      result = JSON.parse(raw);
+      data = JSON.parse(raw);
     } catch {
-      result = { error: "AI returned non-JSON output", raw };
+      return res.status(500).json({
+        error: "Model returned non-JSON output.",
+        raw,
+      });
     }
 
-    return res.json({ meta, result });
-  } catch (err) {
-    console.error("Analyze error:", err);
-    return res.status(500).json({
-      error: "Server error",
-      detail: String(err?.message || err),
+    return res.json({
+      meta,
+      analysis: data,
     });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: "Server error." });
   }
 });
 
-// PDF endpoint (frontend can call this to download a PDF)
 app.post("/api/pdf", (req, res) => {
   try {
-    const title = req.body?.title || "Instagram Strategy Report";
-    const content = req.body?.content || "No content provided.";
+    const title = (req.body?.title || "Instagram Strategy Report").toString();
+    const content = (req.body?.content || "").toString();
 
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", 'attachment; filename="shadowos-report.pdf"');
@@ -218,12 +224,11 @@ app.post("/api/pdf", (req, res) => {
 
     doc.fontSize(20).text(title, { align: "center" });
     doc.moveDown();
-    doc.fontSize(12).text(content);
-
+    doc.fontSize(12).text(content || "No content provided.");
     doc.end();
-  } catch (e) {
-    console.error("PDF error:", e);
-    res.status(500).json({ error: "PDF generation failed." });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "PDF error" });
   }
 });
 
