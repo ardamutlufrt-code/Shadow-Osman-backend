@@ -19,8 +19,7 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: "1mb" }));
 
-// 👇 BURAYA YAZILIYOR
-app.post("/api/pdf", (req, res) => {
+
   try {
     const title = req.body?.title || "Instagram Kanal Strateji Raporu";
     const content = req.body?.content || "";
@@ -46,7 +45,7 @@ app.post("/api/pdf", (req, res) => {
 });
 const PORT = process.env.PORT || 10000;
 
-app.listen(PORT, () => {
+
   console.log("Server running on port", PORT);
 });
 
