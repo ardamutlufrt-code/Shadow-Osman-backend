@@ -10,7 +10,8 @@
  *   OPENAI_API_KEY=xxxxx npm start
  */
 import express from "express";
-import cors from "cors";const PDFDocument = require("pdfkit");
+import cors from "cors";
+import PDFDocument from "pdfkit";
 import * as cheerio from "cheerio";
 import OpenAI from "openai";
 
@@ -29,7 +30,7 @@ app.post("/api/pdf", (req, res) => {
 
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader(
-      "Content-Disposition",
+      "Content-Disposition"
       "attachment; filename=shadowos-report.pdf"
     );
 
