@@ -11,13 +11,48 @@
  */
 import express from "express";
 import cors from "cors";
-import PDFDocument from "pdfkit";
 import * as cheerio from "cheerio";
 import OpenAI from "openai";
-
+import PDFDocument from "pdfkit";  
+         
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: "1mb" }));
+
+// 👇 BURAYA YAZILIYOR
+app.post("/api/pdf", (req, res) => {
+  try {
+    const title = req.body?.title || "Instagram Kanal Strateji Raporu";
+    const content = req.body?.content || "";
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      "attachment; filename=shadowos-report.pdf"
+    );
+
+    const doc = new PDFDocument({ margin: 40 });
+    doc.pipe(res);
+
+    doc.fontSize(20).text(title, { align: "center" });
+    doc.moveDown();
+    doc.fontSize(12).text(content || "Rapor içeriği boş.");
+
+    doc.end();
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "PDF error" });
+  }
+});
+const PORT = process.env.PORT || 10000;
+
+app.listen(PORT, () => {
+  console.log("Server running on port", PORT);
+});
+// 👇 EN ALTA YAKIN
+app.listen(PORT, () => {
+  console.log("Server running");
+});
 app.post("/api/pdf", (req, res) => {
   try {
     const title = req.body && req.body.title
