@@ -1,11 +1,3 @@
-Harika ✅ O zaman server.js’yi sıfırdan, temiz ve Render uyumlu hale getiriyoruz.
-
-Aşağıdaki adımları aynen yap:
-
-⸻
-
-1) GitHub’da server.js → TAMAMINI SİL → BUNU YAPIŞTIR
-
 import express from "express";
 import cors from "cors";
 import * as cheerio from "cheerio";
@@ -14,12 +6,11 @@ import PDFDocument from "pdfkit";
 
 const app = express();
 app.use(cors());
-app.use(express.json({ limit: "1mb" }));
+app.use(express.json({ limit: "2mb" }));
 
-// Render PORT
 const PORT = process.env.PORT || 10000;
 
-// OpenAI (Render Env: OPENAI_API_KEY)
+// OpenAI client (set in Render Environment: OPENAI_API_KEY)
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
@@ -29,7 +20,8 @@ function isValidInstagramUrl(url) {
     const u = new URL(url);
     return (
       ["instagram.com", "www.instagram.com"].includes(u.hostname) &&
-      u.pathname.length > 1
+      u.pathname &&
+      u.pathname !== "/"
     );
   } catch {
     return false;
@@ -37,7 +29,7 @@ function isValidInstagramUrl(url) {
 }
 
 async function fetchPublicMeta(url) {
-  // Instagram bazen botları engeller; bu best-effort
+  // Best-effort: Instagram may block requests sometimes.
   const res = await fetch(url, {
     headers: {
       "User-Agent":
@@ -51,23 +43,15 @@ async function fetchPublicMeta(url) {
 
   const ogTitle = $('meta[property="og:title"]').attr("content") || "";
   const ogDesc = $('meta[property="og:description"]').attr("content") || "";
-  const ogType = $('meta[property="og:type"]').attr("content") || "";
   const title = $("title").text() || "";
 
-  return {
-    ogTitle,
-    ogDesc,
-    ogType,
-    title,
-    fetched: true,
-  };
+  return { ogTitle, ogDesc, title, fetched: true };
 }
 
 function buildSystemPrompt() {
   return `
 You are an expert Instagram growth strategist.
-Return ONLY valid JSON (no markdown, no extra text).
-Language: English.
+Return ONLY valid JSON (no markdown, no extra text). Language: English.
 
 Schema:
 {
@@ -75,7 +59,7 @@ Schema:
   "topics": string[],
   "strengths": string[],
   "gaps": string[],
-  "three_tier_offer": {
+  "digital_products": {
     "basic": {"name": string, "price_suggestion": string, "includes": string[]},
     "standard": {"name": string, "price_suggestion": string, "includes": string[]},
     "premium": {"name": string, "price_suggestion": string, "includes": string[]}
@@ -94,47 +78,52 @@ Schema:
 
 function buildUserPrompt(url, meta) {
   return `
-Analyze this Instagram account from public metadata.
+Analyze this Instagram account using only public metadata.
+If metadata is limited, make best-effort inferences and be explicit in "notes".
 
-URL: ${url}
+Instagram URL: ${url}
 
-Meta:
+Public metadata:
 - og:title: ${meta.ogTitle}
 - og:description: ${meta.ogDesc}
-- title: ${meta.title}
+- title tag: ${meta.title}
 
-If metadata is limited, make best-effort inferences and be explicit in "notes".
 Return JSON only.
 `.trim();
 }
 
 // Healthcheck
 app.get("/", (req, res) => {
-  res.json({ ok: true, service: "ShadowOS-backend", time: new Date().toISOString() });
+  res.json({
+    ok: true,
+    service: "ShadowOS-backend",
+    time: new Date().toISOString(),
+  });
 });
 
-// Main analyze endpoint (frontend bunu çağırıyor)
+// Main analyze endpoint (frontend should call this)
 app.post("/api/analyze", async (req, res) => {
   try {
     const { url } = req.body || {};
 
     if (!url || !isValidInstagramUrl(url)) {
-      return res.status(400).json({ error: "Geçerli bir Instagram linki gir." });
+      return res.status(400).json({ error: "Please provide a valid Instagram URL." });
     }
 
-    // OPENAI_API_KEY yoksa hızlı hata verelim (Render env kontrol)
     if (!process.env.OPENAI_API_KEY) {
       return res.status(500).json({
-        error: "OPENAI_API_KEY eksik. Render > Settings > Environment'a ekle.",
+        error:
+          "OPENAI_API_KEY is missing. Add it in Render > Settings > Environment.",
       });
     }
 
-    let meta = { fetched: false, ogTitle: "", ogDesc: "", ogType: "", title: "" };
+    // Fetch metadata best-effort
+    let meta = { ogTitle: "", ogDesc: "", title: "", fetched: false };
     try {
       meta = await fetchPublicMeta(url);
-    } catch (e) {
-      // IG engellediyse meta boş kalabilir; yine de AI ile üretiriz
-      meta = { fetched: false, ogTitle: "", ogDesc: "", ogType: "", title: "" };
+    } catch {
+      // If Instagram blocks, we still proceed with AI using empty meta
+      meta = { ogTitle: "", ogDesc: "", title: "", fetched: false };
     }
 
     const model = process.env.OPENAI_MODEL || "gpt-4.1-mini";
@@ -145,4 +134,52 @@ app.post("/api/analyze", async (req, res) => {
       response_format: { type: "json_object" },
       messages: [
         { role: "system", content: buildSystemPrompt() },
-        { role: "user", content: buildUserPrompt(url, meta)
+        { role: "user", content: buildUserPrompt(url, meta) },
+      ],
+    });
+
+    const raw = completion.choices?.[0]?.message?.content || "{}";
+
+    let result;
+    try {
+      result = JSON.parse(raw);
+    } catch {
+      result = { error: "AI returned non-JSON output", raw };
+    }
+
+    return res.json({ meta, result });
+  } catch (err) {
+    console.error("Analyze error:", err);
+    return res.status(500).json({
+      error: "Server error",
+      detail: String(err?.message || err),
+    });
+  }
+});
+
+// PDF endpoint (frontend can call this to download a PDF)
+app.post("/api/pdf", (req, res) => {
+  try {
+    const title = req.body?.title || "Instagram Strategy Report";
+    const content = req.body?.content || "No content provided.";
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", 'attachment; filename="shadowos-report.pdf"');
+
+    const doc = new PDFDocument({ margin: 40 });
+    doc.pipe(res);
+
+    doc.fontSize(20).text(title, { align: "center" });
+    doc.moveDown();
+    doc.fontSize(12).text(content);
+
+    doc.end();
+  } catch (e) {
+    console.error("PDF error:", e);
+    res.status(500).json({ error: "PDF generation failed." });
+  }
+});
+
+app.listen(PORT, () => {
+  console.log(`ShadowOS backend running on port ${PORT}`);
+});
