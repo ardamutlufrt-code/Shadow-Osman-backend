@@ -9,66 +9,89 @@ import OpenAI from "openai";
 
 const app = express();
 
-// --- CORS (allow all for MVP) ---
-app.use(cors());
+app.use(cors()); // MVP: allow all
 app.use(express.json({ limit: "1mb" }));
 
-// --- Health check ---
+// Health check
 app.get("/health", (req, res) => res.json({ ok: true }));
 
-// --- Helpers ---
+// Helpers
+function normalizeUrl(u) {
+  const s = String(u || "").trim();
+  if (!s) return "";
+  if (s.startsWith("http://") || s.startsWith("https://")) return s;
+  return "https://" + s;
+}
+
 function isValidInstagramUrl(u) {
   try {
     const url = new URL(u);
     if (!["instagram.com", "www.instagram.com"].includes(url.hostname)) return false;
-    // allow /username , /reel/... , /p/... , /tv/... etc.
-    return url.pathname && url.pathname.length > 1;
+    return !!url.pathname && url.pathname.length > 1;
   } catch {
     return false;
   }
 }
 
 async function fetchPublicMeta(url) {
-  // best-effort: fetch HTML and read meta tags
-  const resp = await fetch(url, {
-    method: "GET",
-    headers: {
-      "User-Agent":
-        "Mozilla/5.0 (compatible; ShadowOSBot/1.0; +https://shadowos-backend.onrender.com)",
-      "Accept-Language": "en-US,en;q=0.9",
-    },
-  });
+  // Best-effort with timeout (Instagram may block; that's OK)
+  const controller = new AbortController();
+  const t = setTimeout(() => controller.abort(), 12000);
 
-  const html = await resp.text();
-  const $ = cheerio.load(html);
+  try {
+    const resp = await fetch(url, {
+      method: "GET",
+      signal: controller.signal,
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (compatible; ShadowOSBot/1.0; +https://shadowos-backend.onrender.com)",
+        "Accept-Language": "en-US,en;q=0.9",
+      },
+    });
 
-  const get = (sel, attr = "content") => $(sel).attr(attr) || "";
+    const html = await resp.text();
+    const $ = cheerio.load(html);
 
-  const title =
-    get('meta[property="og:title"]') ||
-    $("title").text() ||
-    get('meta[name="title"]');
+    const get = (sel, attr = "content") => $(sel).attr(attr) || "";
 
-  const description =
-    get('meta[property="og:description"]') ||
-    get('meta[name="description"]');
+    const title =
+      get('meta[property="og:title"]') ||
+      $("title").text() ||
+      get('meta[name="title"]');
 
-  const image = get('meta[property="og:image"]');
-  const siteName = get('meta[property="og:site_name"]');
+    const description =
+      get('meta[property="og:description"]') ||
+      get('meta[name="description"]');
 
-  return {
-    url,
-    title: (title || "").trim(),
-    description: (description || "").trim(),
-    image: (image || "").trim(),
-    siteName: (siteName || "").trim(),
-    fetchedOk: resp.ok,
-    status: resp.status,
-  };
+    const image = get('meta[property="og:image"]');
+    const siteName = get('meta[property="og:site_name"]');
+
+    return {
+      url,
+      title: (title || "").trim(),
+      description: (description || "").trim(),
+      image: (image || "").trim(),
+      siteName: (siteName || "").trim(),
+      fetchedOk: resp.ok,
+      status: resp.status,
+    };
+  } catch (e) {
+    return {
+      url,
+      title: "",
+      description: "",
+      image: "",
+      siteName: "",
+      fetchedOk: false,
+      status: 0,
+      error: String(e?.message || e),
+    };
+  } finally {
+    clearTimeout(t);
+  }
 }
 
 function buildSystemPrompt() {
-  // ENGLISH output as you requested
   return `
 You are an Instagram growth strategist.
 You will be given best-effort public metadata (title/description) from an Instagram URL.
@@ -114,21 +137,21 @@ function safeJsonParse(text) {
   }
 }
 
-// --- API: Analyze ---
+// API: Analyze
 app.post("/api/analyze", async (req, res) => {
   try {
-    const { url } = req.body || {};
+    const inputUrl = normalizeUrl(req.body?.url);
 
-    if (!url || !isValidInstagramUrl(url)) {
-      return res.status(400).json({ error: "Please provide a valid instagram.com URL." });
+    if (!inputUrl || !isValidInstagramUrl(inputUrl)) {
+      return res.status(400).json({ ok: false, error: "Please provide a valid instagram.com URL." });
     }
 
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) {
-      return res.status(500).json({ error: "OPENAI_API_KEY is not set on the server." });
+      return res.status(500).json({ ok: false, error: "OPENAI_API_KEY is not set on the server." });
     }
 
-    const meta = await fetchPublicMeta(url);
+    const meta = await fetchPublicMeta(inputUrl);
 
     const client = new OpenAI({ apiKey });
 
@@ -147,23 +170,30 @@ app.post("/api/analyze", async (req, res) => {
 
     if (!parsed.ok) {
       return res.status(500).json({
+        ok: false,
         error: "Model did not return valid JSON.",
         raw,
       });
     }
 
-    // Return the analysis JSON directly (frontend expects JSON)
-    return res.json(parsed.value);
+    // IMPORTANT: wrap result the way your Analyzer UI expects
+    return res.json({
+      ok: true,
+      inputUrl,
+      meta,
+      result: parsed.value,
+    });
   } catch (e) {
     console.error("Analyze error:", e);
     return res.status(500).json({
+      ok: false,
       error: "Analyze failed.",
       details: String(e?.message || e),
     });
   }
 });
 
-// --- Start server (Render uses PORT env) ---
+// Start server (Render uses PORT env)
 const PORT = Number(process.env.PORT || 10000);
 app.listen(PORT, () => {
   console.log("ShadowOS backend running on port", PORT);
