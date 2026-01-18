@@ -1,5 +1,5 @@
 // server.js (Render-ready, ESM)
-// Required env: OPENAI_API_KEY
+// Required env on Render: OPENAI_API_KEY
 // Optional env: OPENAI_MODEL (default: gpt-4.1-mini)
 
 import express from "express";
@@ -9,13 +9,14 @@ import OpenAI from "openai";
 
 const app = express();
 
-app.use(cors()); // MVP: allow all
+// CORS + JSON
+app.use(cors());
 app.use(express.json({ limit: "1mb" }));
 
 // Health check
 app.get("/health", (req, res) => res.json({ ok: true }));
 
-// Helpers
+// --- Helpers ---
 function normalizeUrl(u) {
   const s = String(u || "").trim();
   if (!s) return "";
@@ -34,7 +35,6 @@ function isValidInstagramUrl(u) {
 }
 
 async function fetchPublicMeta(url) {
-  // Best-effort with timeout (Instagram may block; that's OK)
   const controller = new AbortController();
   const t = setTimeout(() => controller.abort(), 12000);
 
@@ -94,6 +94,7 @@ async function fetchPublicMeta(url) {
 function buildSystemPrompt() {
   return `
 You are an Instagram growth strategist.
+
 You will be given best-effort public metadata (title/description) from an Instagram URL.
 If data is limited or missing, still provide a reasonable strategy based on assumptions.
 
@@ -137,7 +138,7 @@ function safeJsonParse(text) {
   }
 }
 
-// API: Analyze
+// --- API: Analyze ---
 app.post("/api/analyze", async (req, res) => {
   try {
     const inputUrl = normalizeUrl(req.body?.url);
@@ -169,14 +170,9 @@ app.post("/api/analyze", async (req, res) => {
     const parsed = safeJsonParse(raw);
 
     if (!parsed.ok) {
-      return res.status(500).json({
-        ok: false,
-        error: "Model did not return valid JSON.",
-        raw,
-      });
+      return res.status(500).json({ ok: false, error: "Model did not return valid JSON.", raw });
     }
 
-    // IMPORTANT: wrap result the way your Analyzer UI expects
     return res.json({
       ok: true,
       inputUrl,
@@ -185,16 +181,10 @@ app.post("/api/analyze", async (req, res) => {
     });
   } catch (e) {
     console.error("Analyze error:", e);
-    return res.status(500).json({
-      ok: false,
-      error: "Analyze failed.",
-      details: String(e?.message || e),
-    });
+    return res.status(500).json({ ok: false, error: "Analyze failed.", details: String(e?.message || e) });
   }
 });
 
 // Start server (Render uses PORT env)
 const PORT = Number(process.env.PORT || 10000);
-app.listen(PORT, () => {
-  console.log("ShadowOS backend running on port", PORT);
-});
+app.listen(PORT, () => console.log("ShadowOS backend running on port", PORT));
